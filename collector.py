@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import requests
 import pg8000.native
+from urllib.parse import urlparse
 
 # --- Config ---
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -20,19 +21,27 @@ log = logging.getLogger(__name__)
 
 
 def get_connection():
-    return psycopg2.connect(DATABASE_URL)
+    url = urlparse(DATABASE_URL)
+    return pg8000.native.Connection(
+        host=url.hostname,
+        port=url.port,
+        database=url.path.lstrip("/"),
+        user=url.username,
+        password=url.password,
+        ssl_context=True
+    )
 
 
-def upsert_ride(cur, ride_id, park_id, name, land_id, land_name):
-    cur.execute("""
+def upsert_ride(conn, ride_id, park_id, name, land_id, land_name):
+    conn.run("""
         INSERT INTO rides (id, park_id, name, land_id, land_name)
-        VALUES (%s, %s, %s, %s, %s)
+        VALUES (:id, :park_id, :name, :land_id, :land_name)
         ON CONFLICT (id) DO UPDATE SET
-            name      = EXCLUDED.name,
-            land_id   = EXCLUDED.land_id,
-            land_name = EXCLUDED.land_name,
+            name       = EXCLUDED.name,
+            land_id    = EXCLUDED.land_id,
+            land_name  = EXCLUDED.land_name,
             updated_at = NOW()
-    """, (ride_id, park_id, name, land_id, land_name))
+    """, id=ride_id, park_id=park_id, name=name, land_id=land_id, land_name=land_name)
 
 
 def fetch_and_store(park_id):
@@ -87,20 +96,20 @@ def fetch_and_store(park_id):
 
     try:
         conn = get_connection()
-        with conn:
-            with conn.cursor() as cur:
-                for row in rides_data:
-                    ride_id, park_id_, is_open, wait_time, coll, src_updated, name, land_id, land_name = row
-                    upsert_ride(cur, ride_id, park_id_, name, land_id, land_name)
-
-                execute_values(cur, """
-                    INSERT INTO wait_times (ride_id, park_id, is_open, wait_minutes, collected_at, source_updated_at)
-                    VALUES %s
-                """, [
-                    (r[0], r[1], r[2], r[3], r[4], r[5])
-                    for r in rides_data
-                ])
-
+        for row in rides_data:
+            ride_id, park_id_, is_open, wait_time, coll, src_updated, name, land_id, land_name = row
+            upsert_ride(conn, ride_id, park_id_, name, land_id, land_name)
+            conn.run("""
+                INSERT INTO wait_times (ride_id, park_id, is_open, wait_minutes, collected_at, source_updated_at)
+                VALUES (:ride_id, :park_id, :is_open, :wait_minutes, :collected_at, :source_updated_at)
+            """,
+                ride_id=ride_id,
+                park_id=park_id_,
+                is_open=is_open,
+                wait_minutes=wait_time,
+                collected_at=coll,
+                source_updated_at=src_updated
+            )
         conn.close()
         log.info(f"Park {park_id}: stored {len(rides_data)} rides")
     except Exception as e:
