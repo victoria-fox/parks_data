@@ -28,7 +28,7 @@ def get_connection():
         database=url.path.lstrip("/"),
         user=url.username,
         password=url.password,
-        ssl_context=False
+        ssl_context=None
     )
 
 
