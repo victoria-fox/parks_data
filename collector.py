@@ -4,8 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 import requests
-import psycopg2
-from psycopg2.extras import execute_values
+import pg8000.native
 
 # --- Config ---
 DATABASE_URL = os.environ["DATABASE_URL"]
